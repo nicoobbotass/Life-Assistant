@@ -1,61 +1,78 @@
 """
-Tareas pendientes de Canvas LMS.
+Tareas pendientes de Canvas — vía el feed de calendario (.ics), no la API REST.
 
-Necesita un token personal: en Canvas ve a
-Cuenta -> Configuración -> "+ Nuevo token de acceso".
-Guárdalo como CANVAS_TOKEN en backend/.env, junto con la URL de tu
-instancia (p.ej. https://tuuniversidad.instructure.com) en CANVAS_URL.
+Útil cuando tu institución tiene desactivada la creación de tokens
+personales. El feed es una URL única por usuario que ya funciona como
+autenticación (nadie más la conoce), así que no hace falta login.
+
+Cómo encontrarla: en Canvas, ve a Calendario -> botón "Calendario"
+(abajo a la derecha) -> "Feed de calendario" (Calendar Feed). Copia esa
+URL completa (empieza por https:// y termina en .ics) en CANVAS_ICS_URL,
+dentro de backend/.env.
 """
 import os
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter
+from icalendar import Calendar
 
 router = APIRouter()
 
-CANVAS_URL = os.environ.get("CANVAS_URL", "")
-CANVAS_TOKEN = os.environ.get("CANVAS_TOKEN", "")
+CANVAS_ICS_URL = os.environ.get("CANVAS_ICS_URL", "")
+
+PATRON_CURSO = re.compile(r"\[([^\]]+)\]\s*$")
+
+
+def _a_datetime(valor) -> datetime:
+    dt = valor.dt
+    if not isinstance(dt, datetime):
+        dt = datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 @router.get("/pendientes")
 async def tareas_pendientes(dias: int = 14):
-    """Devuelve las tareas (assignments) con fecha de entrega en los
-    próximos `dias` días, de todos los cursos activos."""
-    limite = datetime.utcnow() + timedelta(days=dias)
-    headers = {"Authorization": f"Bearer {CANVAS_TOKEN}"}
+    if not CANVAS_ICS_URL:
+        return []
 
     async with httpx.AsyncClient() as client:
-        cursos_resp = await client.get(
-            f"{CANVAS_URL}/api/v1/courses",
-            params={"enrollment_state": "active", "per_page": 50},
-            headers=headers,
-        )
-        cursos_resp.raise_for_status()
-        cursos = cursos_resp.json()
+        resp = await client.get(CANVAS_ICS_URL, timeout=15)
+        resp.raise_for_status()
 
-        tareas = []
-        for curso in cursos:
-            r = await client.get(
-                f"{CANVAS_URL}/api/v1/courses/{curso['id']}/assignments",
-                params={"per_page": 100, "order_by": "due_at"},
-                headers=headers,
-            )
-            r.raise_for_status()
-            for t in r.json():
-                if not t.get("due_at"):
-                    continue
-                fecha = datetime.fromisoformat(t["due_at"].replace("Z", "+00:00"))
-                if fecha.replace(tzinfo=None) <= limite:
-                    tareas.append(
-                        {
-                            "id": t["id"],
-                            "titulo": t["name"],
-                            "curso": curso.get("name"),
-                            "fecha_entrega": t["due_at"],
-                            "url": t.get("html_url"),
-                        }
-                    )
+    calendario = Calendar.from_ical(resp.content)
+    ahora = datetime.now(timezone.utc)
+    limite = ahora + timedelta(days=dias)
+
+    tareas = []
+    for evento in calendario.walk("VEVENT"):
+        uid = str(evento.get("UID", ""))
+        if "assignment" not in uid:
+            continue
+        if "DTSTART" not in evento:
+            continue
+
+        fecha = _a_datetime(evento["DTSTART"])
+        if not (ahora <= fecha <= limite):
+            continue
+
+        titulo_completo = str(evento.get("SUMMARY", "Sin título"))
+        match = PATRON_CURSO.search(titulo_completo)
+        curso = match.group(1) if match else None
+        titulo = PATRON_CURSO.sub("", titulo_completo).strip()
+
+        tareas.append(
+            {
+                "id": uid,
+                "titulo": titulo,
+                "curso": curso,
+                "fecha_entrega": fecha.isoformat(),
+                "url": str(evento.get("URL", "")) or None,
+            }
+        )
 
     tareas.sort(key=lambda t: t["fecha_entrega"])
     return tareas
