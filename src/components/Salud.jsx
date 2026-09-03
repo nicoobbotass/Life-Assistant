@@ -23,15 +23,17 @@ export default function Salud() {
     <div className="card">
       <div className="card__title">Salud (Apple Health) — hoy</div>
       <div style={{ display: 'flex', gap: 24 }}>
-        <div>
-          <div style={{ fontSize: 28, fontWeight: 700 }}>{datos.pasos}</div>
-          <div style={{ color: 'var(--muted)', fontSize: 12 }}>pasos</div>
-        </div>
+      <div>
+        <div style={{ fontSize: 28, fontWeight: 700 }}>{datos.pasos}</div>
+        <div style={{ color: 'var(--muted)', fontSize: 12 }}>pasos</div>
+      </div>
+      {datos.calorias_activas != null && (
         <div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>{datos.calorias_activas}</div>
           <div style={{ color: 'var(--muted)', fontSize: 12 }}>kcal activas</div>
         </div>
-      </div>
+      )}
+    </div>
     </div>
   )
 }

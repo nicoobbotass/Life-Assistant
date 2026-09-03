@@ -19,7 +19,7 @@ router = APIRouter()
 class DatosSalud(BaseModel):
     fecha: str
     pasos: int
-    calorias_activas: float
+    calorias_activas: float | None = None
     frecuencia_cardiaca_media: float | None = None
 
 
